@@ -59,7 +59,7 @@ namespace RevitSyncService
                 var projectManager = new ProjectManager(configService);
                 IDownloadService downloadService = new DownloadService(logService);
                 IConversionService conversionService = new ConversionService(logService);
-                var queueManager = new QueueManager(projectManager, downloadService, conversionService, logService);
+                var queueManager = new QueueManager(projectManager, downloadService, conversionService, logService, configService);
 
                 // 3. Планировщик
                 _scheduler = new Scheduler(projectManager, queueManager, logService);

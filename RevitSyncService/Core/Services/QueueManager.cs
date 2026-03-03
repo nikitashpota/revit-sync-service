@@ -25,6 +25,7 @@ namespace RevitSyncService.Core.Services
         public event Action? OnQueueUpdated;
 
         public bool IsRunning => _isProcessing;
+        private readonly ConfigService _configService;
 
         /// <summary>
         /// Текущая очередь (копия для UI)
@@ -41,12 +42,14 @@ namespace RevitSyncService.Core.Services
             ProjectManager projectManager,
             IDownloadService downloadService,
             IConversionService conversionService,
-            ILogService log)
+            ILogService log,
+            ConfigService configService)
         {
             _projectManager = projectManager;
             _downloadService = downloadService;
             _conversionService = conversionService;
             _log = log;
+            _configService = configService;
         }
 
         /// <summary>
@@ -171,6 +174,28 @@ namespace RevitSyncService.Core.Services
                     int converted = await _conversionService.ConvertToNwcAsync(
                         downloadedFiles, project.Destination.NwcPath, revitVersion, progress, ct);
                     _log.Info($"Конвертировано: {converted}/{downloadedFiles.Count}", project.Name);
+                }
+
+                // Создать задачу на проверку коллизий если конвертация была и NWC папка указана
+                if (project.Destination.CreateNwc && !string.IsNullOrEmpty(project.Destination.NwcPath))
+                {
+                    try
+                    {
+                        var clashTask = new ClashTask
+                        {
+                            ProjectId = project.Id,
+                            ProjectName = project.Name,
+                            NwcFolder = project.Destination.NwcPath,
+                            RevitVersion = project.Source.RevitVersion
+                        };
+                        _configService.Repository?.InsertClashTask(clashTask);
+                        _log.Info($"Задача на проверку коллизий создана", project.Name);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Не падаем — clash task некритичен для основного процесса
+                        _log.Warning($"Не удалось создать clash task: {ex.Message}", project.Name);
+                    }
                 }
 
                 _projectManager.MarkCompleted(project.Id, ProjectStatus.Completed);

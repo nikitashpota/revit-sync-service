@@ -35,6 +35,18 @@ namespace RevitSyncService.Infrastructure.Database
                 VALUES (1)
                 ON CONFLICT (id) DO NOTHING;
 
+                CREATE TABLE IF NOT EXISTS clash_tasks (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    nwc_folder TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'Pending',
+                    error_message TEXT,
+                    revit_version TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -240,6 +252,85 @@ namespace RevitSyncService.Infrastructure.Database
                 UpdatedAt = (DateTime)r["updated_at"]
             };
         }
+
+        // === CLASH TASKS ===
+
+        public async Task InsertClashTaskAsync(ClashTask task)
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            await using var cmd = new NpgsqlCommand(@"
+        INSERT INTO clash_tasks 
+            (id, project_id, project_name, nwc_folder, status, revit_version, created_at, updated_at)
+        VALUES 
+            (@id, @project_id, @project_name, @nwc_folder, @status, @revit_version, NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING", conn);
+
+            cmd.Parameters.AddWithValue("id", task.Id);
+            cmd.Parameters.AddWithValue("project_id", task.ProjectId);
+            cmd.Parameters.AddWithValue("project_name", task.ProjectName);
+            cmd.Parameters.AddWithValue("nwc_folder", task.NwcFolder);
+            cmd.Parameters.AddWithValue("status", task.Status.ToString());
+            cmd.Parameters.AddWithValue("revit_version", (object?)task.RevitVersion ?? DBNull.Value);
+
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        public async Task UpdateClashTaskStatusAsync(string taskId, ClashTaskStatus status, string? errorMessage = null)
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            await using var cmd = new NpgsqlCommand(@"
+        UPDATE clash_tasks SET
+            status = @status,
+            error_message = @error,
+            updated_at = NOW()
+        WHERE id = @id", conn);
+
+            cmd.Parameters.AddWithValue("id", taskId);
+            cmd.Parameters.AddWithValue("status", status.ToString());
+            cmd.Parameters.AddWithValue("error", (object?)errorMessage ?? DBNull.Value);
+
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        public async Task<List<ClashTask>> GetPendingClashTasksAsync()
+        {
+            var tasks = new List<ClashTask>();
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            await using var cmd = new NpgsqlCommand(
+                "SELECT * FROM clash_tasks WHERE status = 'Pending' ORDER BY created_at", conn);
+            await using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+                tasks.Add(ReadClashTask(reader));
+            return tasks;
+        }
+
+        private static ClashTask ReadClashTask(NpgsqlDataReader r) => new()
+        {
+            Id = r["id"].ToString()!,
+            ProjectId = r["project_id"].ToString()!,
+            ProjectName = r["project_name"].ToString()!,
+            NwcFolder = r["nwc_folder"].ToString()!,
+            Status = Enum.TryParse<ClashTaskStatus>(r["status"].ToString(), out var s) ? s : ClashTaskStatus.Pending,
+            ErrorMessage = r["error_message"] as string,
+            RevitVersion = r["revit_version"] as string,
+            CreatedAt = (DateTime)r["created_at"],
+            UpdatedAt = (DateTime)r["updated_at"]
+        };
+
+        // Синхронные обёртки
+        public void InsertClashTask(ClashTask task)
+            => Task.Run(() => InsertClashTaskAsync(task)).GetAwaiter().GetResult();
+
+        public List<ClashTask> GetPendingClashTasks()
+            => Task.Run(GetPendingClashTasksAsync).GetAwaiter().GetResult();
+
+        public void UpdateClashTaskStatus(string taskId, ClashTaskStatus status, string? errorMessage = null)
+            => Task.Run(() => UpdateClashTaskStatusAsync(taskId, status, errorMessage)).GetAwaiter().GetResult();
+
+
 
         // Синхронные обёртки
         public List<Project> LoadProjects()
