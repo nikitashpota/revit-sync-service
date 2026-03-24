@@ -188,7 +188,7 @@ namespace RevitSyncService.Core.Services
                             NwcFolder = project.Destination.NwcPath,
                             RevitVersion = project.Source.RevitVersion
                         };
-                        _configService.Repository?.InsertClashTask(clashTask);
+                        _configService.Repository?.UpsertClashTaskByProject(clashTask);
                         _log.Info($"Задача на проверку коллизий создана", project.Name);
                     }
                     catch (Exception ex)

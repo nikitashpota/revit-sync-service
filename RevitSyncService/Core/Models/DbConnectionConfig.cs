@@ -8,7 +8,17 @@
         public string Username { get; set; } = "progress";
         public string Password { get; set; } = "12345678";
 
-        public string ToConnectionString() => $"Host={Host};Port={Port};Database={Database};Username={Username};Password={Password};Timeout=5;Command Timeout=10";
+        public string ToConnectionString() =>
+    $"Host={Host};" +
+    $"Port={Port};" +
+    $"Database={Database};" +
+    $"Username={Username};" +
+    $"Password={Password};" +
+    $"Timeout=5;" +
+    $"Command Timeout=10;" +
+    $"Pooling=true;" +
+    $"Minimum Pool Size=1;" +
+    $"Maximum Pool Size=10;";  // ← ограничиваем пул
 
         /// <summary>
         /// Сохранить в одну строку для хранения в файле

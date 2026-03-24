@@ -47,6 +47,10 @@ namespace RevitSyncService.Infrastructure.Database
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
+                -- Уникальный индекс по project_id для upsert по проекту
+                CREATE UNIQUE INDEX IF NOT EXISTS uix_clash_tasks_project_id
+                    ON clash_tasks(project_id);
+
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -93,8 +97,8 @@ namespace RevitSyncService.Infrastructure.Database
                 return new GlobalSettings
                 {
                     ExcludedFolders = reader.GetString(0)
-    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-    .ToList(),
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .ToList(),
                     TempFolder = reader.GetString(1),
                     LogFolder = reader.GetString(2),
                     LogRetentionDays = reader.GetInt32(3)
@@ -255,22 +259,30 @@ namespace RevitSyncService.Infrastructure.Database
 
         // === CLASH TASKS ===
 
-        public async Task InsertClashTaskAsync(ClashTask task)
+        /// <summary>
+        /// Upsert по project_id: если запись есть — сбрасывает статус в Pending.
+        /// Используется из QueueManager после каждой успешной конвертации.
+        /// </summary>
+        public async Task UpsertClashTaskByProjectAsync(ClashTask task)
         {
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync().ConfigureAwait(false);
             await using var cmd = new NpgsqlCommand(@"
-        INSERT INTO clash_tasks 
-            (id, project_id, project_name, nwc_folder, status, revit_version, created_at, updated_at)
-        VALUES 
-            (@id, @project_id, @project_name, @nwc_folder, @status, @revit_version, NOW(), NOW())
-        ON CONFLICT (id) DO NOTHING", conn);
+                INSERT INTO clash_tasks
+                    (id, project_id, project_name, nwc_folder, status, revit_version, created_at, updated_at)
+                VALUES
+                    (@id, @project_id, @project_name, @nwc_folder, 'Pending', @revit_version, NOW(), NOW())
+                ON CONFLICT (project_id) DO UPDATE SET
+                    nwc_folder    = EXCLUDED.nwc_folder,
+                    status        = 'Pending',
+                    revit_version = EXCLUDED.revit_version,
+                    error_message = NULL,
+                    updated_at    = NOW()", conn);
 
             cmd.Parameters.AddWithValue("id", task.Id);
             cmd.Parameters.AddWithValue("project_id", task.ProjectId);
             cmd.Parameters.AddWithValue("project_name", task.ProjectName);
             cmd.Parameters.AddWithValue("nwc_folder", task.NwcFolder);
-            cmd.Parameters.AddWithValue("status", task.Status.ToString());
             cmd.Parameters.AddWithValue("revit_version", (object?)task.RevitVersion ?? DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
@@ -281,11 +293,11 @@ namespace RevitSyncService.Infrastructure.Database
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync().ConfigureAwait(false);
             await using var cmd = new NpgsqlCommand(@"
-        UPDATE clash_tasks SET
-            status = @status,
-            error_message = @error,
-            updated_at = NOW()
-        WHERE id = @id", conn);
+                UPDATE clash_tasks SET
+                    status = @status,
+                    error_message = @error,
+                    updated_at = NOW()
+                WHERE id = @id", conn);
 
             cmd.Parameters.AddWithValue("id", taskId);
             cmd.Parameters.AddWithValue("status", status.ToString());
@@ -320,9 +332,10 @@ namespace RevitSyncService.Infrastructure.Database
             UpdatedAt = (DateTime)r["updated_at"]
         };
 
-        // Синхронные обёртки
-        public void InsertClashTask(ClashTask task)
-            => Task.Run(() => InsertClashTaskAsync(task)).GetAwaiter().GetResult();
+        // === СИНХРОННЫЕ ОБЁРТКИ ===
+
+        public void UpsertClashTaskByProject(ClashTask task)
+            => Task.Run(() => UpsertClashTaskByProjectAsync(task)).GetAwaiter().GetResult();
 
         public List<ClashTask> GetPendingClashTasks()
             => Task.Run(GetPendingClashTasksAsync).GetAwaiter().GetResult();
@@ -330,9 +343,6 @@ namespace RevitSyncService.Infrastructure.Database
         public void UpdateClashTaskStatus(string taskId, ClashTaskStatus status, string? errorMessage = null)
             => Task.Run(() => UpdateClashTaskStatusAsync(taskId, status, errorMessage)).GetAwaiter().GetResult();
 
-
-
-        // Синхронные обёртки
         public List<Project> LoadProjects()
             => Task.Run(LoadProjectsAsync).GetAwaiter().GetResult();
 
